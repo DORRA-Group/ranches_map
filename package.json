@@ -1,0 +1,24 @@
+{
+  "name": "ranches-map",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/react": "latest",
+    "@types/node": "latest",
+    "@types/react-dom": "latest",
+    "@types/leaflet": "^1.9.21"
+  }
+}
