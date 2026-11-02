@@ -1,0 +1,15 @@
+{
+  "edge_count": 507,
+  "ribbon_segments": 11619,
+  "blocked_segments": 3254,
+  "surface_area_sqm": 33267.57,
+  "uv_mapping": "continuous-curvilinear-ribbon",
+  "overlap_removal": true,
+  "triangles": 38565,
+  "wall_triangles": 110420,
+  "lamppost_count": 243,
+  "max_lamp_visibility_m": 650.0,
+  "curb_clearance_m": 0.6,
+  "texture_m_per_repeat": 2.4,
+  "safety_note": "Concept only; site elevations, true pavement widths, setbacks and lamp engineering unverified."
+}

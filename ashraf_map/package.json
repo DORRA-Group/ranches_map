@@ -1,0 +1,26 @@
+{
+  "name": "ranches-phase-1-map",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "copy:cesium": "node scripts/copy-cesium-assets.mjs",
+    "predev": "npm run copy:cesium",
+    "dev": "vite --host 127.0.0.1 --port 4173",
+    "prebuild": "npm run copy:cesium",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cesium": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}

@@ -1,0 +1,17 @@
+RANCHES Road Marking Changes ONLY
+
+This patch was created against the App.tsx from your latest ZIP (ranches-cesium-map copy(1).zip).
+
+1. Back up src/App.tsx.
+2. Copy public/data/*.bin and paint-meshes-manifest.json to your project's public/data folder.
+3. Copy scripts/build-paint-meshes.py into your project's scripts folder.
+4. Open Terminal in your project root (folder containing src and public), and run:
+
+   git apply --check /absolute/path/to/road-markings.patch
+   git apply /absolute/path/to/road-markings.patch
+
+5. Run: npm run dev
+
+If the check fails, do not force the patch: your App.tsx may have changed since the uploaded ZIP.
+
+The Python script is only needed if you modify underlying GIS geometries and want to regenerate paint meshes; normal app startup does not run it.

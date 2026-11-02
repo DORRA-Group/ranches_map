@@ -1,0 +1,237 @@
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -104,9 +104,9 @@
+ 
+ 
+ 
+-const PAVEMENT_CURB_HEIGHT = 0.13;
+-
+-const PAVEMENT_OUTLINE_HEIGHT = 0.105;
++const PAVEMENT_CURB_HEIGHT = ROAD_SURFACE_HEIGHT + 0.15; // raised 15 cm over asphalt
++
++const PAVEMENT_OUTLINE_HEIGHT = PAVEMENT_CURB_HEIGHT - 0.005;
+ 
+ 
+ 
+@@ -479,6 +479,8 @@
+   | "curb-white"
+ 
+   | "curb-black"
++  | "parking-curb-white"
++  | "parking-curb-black"
+ 
+   | "parking-edges"
+ 
+@@ -488,13 +490,15 @@
+ 
+ 
+ 
+-const PAINT_MESHES: Record<PaintMeshName, { color: string; height: number }> = {
++const PAINT_MESHES: Record<PaintMeshName, { color: string; height: number; baseHeight?: number }> = {
+ 
+   "road-dashes": { color: "#FFF4C2", height: ROAD_MARKING_HEIGHT },
+ 
+-  "curb-white": { color: "#F8F6EE", height: PAVEMENT_CURB_HEIGHT },
+-
+-  "curb-black": { color: "#151515", height: PAVEMENT_CURB_HEIGHT },
++  "curb-white": { color: "#F8F6EE", height: PAVEMENT_CURB_HEIGHT, baseHeight: ROAD_SURFACE_HEIGHT },
++
++  "curb-black": { color: "#151515", height: PAVEMENT_CURB_HEIGHT, baseHeight: ROAD_SURFACE_HEIGHT },
++  "parking-curb-white": { color: "#F8F6EE", height: PAVEMENT_CURB_HEIGHT, baseHeight: PARKING_SURFACE_HEIGHT },
++  "parking-curb-black": { color: "#151515", height: PAVEMENT_CURB_HEIGHT, baseHeight: PARKING_SURFACE_HEIGHT },
+ 
+   "parking-edges": { color: "#F8F6EE", height: PARKING_EDGE_HEIGHT },
+ 
+@@ -508,138 +512,101 @@
+ 
+ const PAINT_MESH_ORIGIN = { longitude: 30.8601, latitude: 30.0950 };
+ 
+-const MAX_QUADS_PER_PRIMITIVE = 12_000;
++// Raised curb segments have eight vertices each. Keep indices within Uint16.
++const MAX_QUADS_PER_PRIMITIVE = 8_000;
+ 
+ 
+ 
+ function buildPaintPrimitive(
+-
+   source: Float32Array,
+-
+   startQuad: number,
+-
+   quadCount: number,
+-
+-  config: { color: string; height: number }
+-
++  config: { color: string; height: number; baseHeight?: number }
+ ): Cesium.Primitive {
+-
+-  // Four corners and two triangles per painted strip segment.
+-
+-  // Both widths and dash lengths are fixed by the source metric geometry.
+-
+-  const positions = new Float64Array(quadCount * 4 * 3);
+-
+-  const indices = new Uint16Array(quadCount * 6);
+-
+-
++  // Each mesh quad contains four WGS84 corners. If baseHeight is supplied,
++  // draw the painted top PLUS four solid vertical curb faces underneath it.
++  // Coordinates and widths are metric and never change when camera moves.
++  const isRaisedCurb = config.baseHeight !== undefined;
++  const verticesPerQuad = isRaisedCurb ? 8 : 4;
++  const indicesPerQuad = isRaisedCurb ? 30 : 6;
++  const positions = new Float64Array(quadCount * verticesPerQuad * 3);
++  const indices = new Uint16Array(quadCount * indicesPerQuad);
+ 
+   for (let q = 0; q < quadCount; q++) {
+-
+-    for (let vertex = 0; vertex < 4; vertex++) {
+-
+-      const offset = (startQuad + q) * 8 + vertex * 2;
+-
++    const firstVertex = q * verticesPerQuad;
++    for (let corner = 0; corner < 4; corner++) {
++      const offset = (startQuad + q) * 8 + corner * 2;
+       const lon = PAINT_MESH_ORIGIN.longitude + source[offset];
+-
+       const lat = PAINT_MESH_ORIGIN.latitude + source[offset + 1];
+ 
+-      const cartesian = Cesium.Cartesian3.fromDegrees(lon, lat, config.height);
+-
+-      const j = (q * 4 + vertex) * 3;
+-
+-      positions[j] = cartesian.x;
+-
+-      positions[j + 1] = cartesian.y;
+-
+-      positions[j + 2] = cartesian.z;
+-
++      const top = Cesium.Cartesian3.fromDegrees(lon, lat, config.height);
++      const pos = (firstVertex + corner) * 3;
++      positions[pos] = top.x;
++      positions[pos + 1] = top.y;
++      positions[pos + 2] = top.z;
++
++      if (isRaisedCurb) {
++        const bottom = Cesium.Cartesian3.fromDegrees(lon, lat, config.baseHeight!);
++        const bottomPos = (firstVertex + 4 + corner) * 3;
++        positions[bottomPos] = bottom.x;
++        positions[bottomPos + 1] = bottom.y;
++        positions[bottomPos + 2] = bottom.z;
++      }
+     }
+ 
+-
+-
+-    const i = q * 6;
+-
+-    const v = q * 4;
+-
+-    indices[i] = v;
+-
+-    indices[i + 1] = v + 1;
+-
+-    indices[i + 2] = v + 2;
+-
+-    indices[i + 3] = v;
+-
+-    indices[i + 4] = v + 2;
+-
+-    indices[i + 5] = v + 3;
+-
++    const i = q * indicesPerQuad;
++    indices.set([
++      firstVertex, firstVertex + 1, firstVertex + 2,
++      firstVertex, firstVertex + 2, firstVertex + 3,
++    ], i);
++
++    if (isRaisedCurb) {
++      let offset = i + 6;
++      for (let edge = 0; edge < 4; edge++) {
++        const next = (edge + 1) % 4;
++        const topA = firstVertex + edge;
++        const topB = firstVertex + next;
++        const bottomA = firstVertex + 4 + edge;
++        const bottomB = firstVertex + 4 + next;
++        indices.set([topA, bottomA, bottomB, topA, bottomB, topB], offset);
++        offset += 6;
++      }
++    }
+   }
+ 
+-
+-
+   const attributes = new Cesium.GeometryAttributes();
+-
+   attributes.position = new Cesium.GeometryAttribute({
+-
+     componentDatatype: Cesium.ComponentDatatype.DOUBLE,
+-
+     componentsPerAttribute: 3,
+-
+     values: positions,
+-
+   });
+ 
+   const geometry = new Cesium.Geometry({
+-
+     attributes,
+-
+     indices,
+-
+     primitiveType: Cesium.PrimitiveType.TRIANGLES,
+-
+     boundingSphere: Cesium.BoundingSphere.fromVertices(positions),
+-
+   });
+ 
+-
+-
+   const color = Cesium.Color.fromCssColorString(config.color);
+-
+   return new Cesium.Primitive({
+-
+     geometryInstances: new Cesium.GeometryInstance({
+-
+       geometry,
+-
+       attributes: {
+-
+         color: Cesium.ColorGeometryInstanceAttribute.fromColor(color),
+-
+       },
+-
+     }),
+-
+     appearance: new Cesium.PerInstanceColorAppearance({
+-
+       flat: true,
+-
+       translucent: false,
+-
+       closed: false,
+-
+     }),
+-
++    // Custom Geometry has no Cesium worker module.
+     asynchronous: false,
+-
+     allowPicking: false,
+-
+   });
+-
+ }
+ 
+-
+-
+ async function loadPaintPrimitives(meshNames: PaintMeshName[]): Promise<Cesium.Primitive[]> {
+ 
+   const files = await Promise.all(meshNames.map(async (meshName) => {
+@@ -1413,6 +1380,7 @@
+           loadedPrimitives = await loadPaintPrimitives([
+ 
+             "pavement-outlines", "curb-white", "curb-black",
++            "parking-curb-white", "parking-curb-black",
+ 
+           ]);
+ 

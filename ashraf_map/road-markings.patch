@@ -1,0 +1,578 @@
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -39,27 +39,20 @@
+ 
+ const PROJECT_RANGE = 4300;
+ const ROAD_SURFACE_URL = "/data/road-surface.geojson";
+-const ROAD_CENTERLINES_URL = "/data/road-centerlines.geojson";
+ const ASPHALT_TEXTURE_URL = "/textures/asphalt.jpg";
+ const ROAD_SURFACE_HEIGHT = 0.05;
+-const ROAD_MARKING_HEIGHT = 0.88;
++const ROAD_MARKING_HEIGHT = ROAD_SURFACE_HEIGHT + 0.015;
+ 
+ const PARKING_TEXTURE_URL =
+   "/textures/parking-pavers.png";
+-const PARKING_ROAD_EDGES_URL =
+-  "/data/parking-road-edges.geojson";
+ 
+ const PARKING_SURFACE_HEIGHT = 0.08;
+ const PARKING_TEXTURE_SIZE_METERS = 3;
+-const PARKING_EDGE_HEIGHT = 0.12;
+-const PARKING_SPACE_LINE_HEIGHT = 0.14;
+-
+-const PAVEMENT_ROAD_EDGES_URL =
+-  "/data/pavement-road-edges.geojson";
++const PARKING_EDGE_HEIGHT = PARKING_SURFACE_HEIGHT + 0.015;
++const PARKING_SPACE_LINE_HEIGHT = PARKING_SURFACE_HEIGHT + 0.018;
+ 
+ const PAVEMENT_CURB_HEIGHT = 0.13;
+-const PAVEMENT_CURB_WIDTH = 5;
+-const PAVEMENT_STRIPE_LENGTH = 20;
++const PAVEMENT_OUTLINE_HEIGHT = 0.105;
+ 
+ // All GIS layers now use GeoJSON.
+ const LAYERS: LayerSpec[] = [
+@@ -239,28 +232,119 @@
+   });
+ }
+ 
+-function raisePolyline(
+-  polyline: Cesium.PolylineGraphics,
+-  height: number
+-) {
+-  const positions = polyline.positions?.getValue(
+-    Cesium.JulianDate.now()
+-  );
+-
+-  if (!positions) return;
+-
+-  polyline.positions = new Cesium.ConstantProperty(
+-    positions.map((position: Cesium.Cartesian3) => {
+-      const cartographic =
+-        Cesium.Cartographic.fromCartesian(position);
+-
+-      return Cesium.Cartesian3.fromRadians(
+-        cartographic.longitude,
+-        cartographic.latitude,
+-        height
++// All paint and curb stripes are REAL polygons in metres, not screen-pixel
++// polylines. They are exported once by scripts/build-paint-meshes.py and
++// remain anchored to the earth as the camera zooms or rotates.
++type PaintMeshName =
++  | "road-dashes"
++  | "curb-white"
++  | "curb-black"
++  | "parking-edges"
++  | "parking-bays"
++  | "pavement-outlines";
++
++const PAINT_MESHES: Record<PaintMeshName, { color: string; height: number }> = {
++  "road-dashes": { color: "#FFF4C2", height: ROAD_MARKING_HEIGHT },
++  "curb-white": { color: "#F8F6EE", height: PAVEMENT_CURB_HEIGHT },
++  "curb-black": { color: "#151515", height: PAVEMENT_CURB_HEIGHT },
++  "parking-edges": { color: "#F8F6EE", height: PARKING_EDGE_HEIGHT },
++  "parking-bays": { color: "#F8F6EE", height: PARKING_SPACE_LINE_HEIGHT },
++  "pavement-outlines": { color: "#AAA495", height: PAVEMENT_OUTLINE_HEIGHT },
++};
++
++const PAINT_MESH_ORIGIN = { longitude: 30.8601, latitude: 30.0950 };
++const MAX_QUADS_PER_PRIMITIVE = 12_000;
++
++function buildPaintPrimitive(
++  source: Float32Array,
++  startQuad: number,
++  quadCount: number,
++  config: { color: string; height: number }
++): Cesium.Primitive {
++  // Four corners and two triangles per painted strip segment.
++  // Both widths and dash lengths are fixed by the source metric geometry.
++  const positions = new Float64Array(quadCount * 4 * 3);
++  const indices = new Uint16Array(quadCount * 6);
++
++  for (let q = 0; q < quadCount; q++) {
++    for (let vertex = 0; vertex < 4; vertex++) {
++      const offset = (startQuad + q) * 8 + vertex * 2;
++      const lon = PAINT_MESH_ORIGIN.longitude + source[offset];
++      const lat = PAINT_MESH_ORIGIN.latitude + source[offset + 1];
++      const cartesian = Cesium.Cartesian3.fromDegrees(lon, lat, config.height);
++      const j = (q * 4 + vertex) * 3;
++      positions[j] = cartesian.x;
++      positions[j + 1] = cartesian.y;
++      positions[j + 2] = cartesian.z;
++    }
++
++    const i = q * 6;
++    const v = q * 4;
++    indices[i] = v;
++    indices[i + 1] = v + 1;
++    indices[i + 2] = v + 2;
++    indices[i + 3] = v;
++    indices[i + 4] = v + 2;
++    indices[i + 5] = v + 3;
++  }
++
++  const attributes = new Cesium.GeometryAttributes();
++  attributes.position = new Cesium.GeometryAttribute({
++    componentDatatype: Cesium.ComponentDatatype.DOUBLE,
++    componentsPerAttribute: 3,
++    values: positions,
++  });
++  const geometry = new Cesium.Geometry({
++    attributes,
++    indices,
++    primitiveType: Cesium.PrimitiveType.TRIANGLES,
++    boundingSphere: Cesium.BoundingSphere.fromVertices(positions),
++  });
++
++  const color = Cesium.Color.fromCssColorString(config.color);
++  return new Cesium.Primitive({
++    geometryInstances: new Cesium.GeometryInstance({
++      geometry,
++      attributes: {
++        color: Cesium.ColorGeometryInstanceAttribute.fromColor(color),
++      },
++    }),
++    appearance: new Cesium.PerInstanceColorAppearance({
++      flat: true,
++      translucent: false,
++      closed: false,
++    }),
++    asynchronous: true,
++    allowPicking: false,
++  });
++}
++
++async function loadPaintPrimitives(meshNames: PaintMeshName[]): Promise<Cesium.Primitive[]> {
++  const files = await Promise.all(meshNames.map(async (meshName) => {
++    const response = await fetch(`/data/${meshName}.bin`);
++    if (!response.ok) throw new Error(`Unable to load ${meshName}.bin (${response.status})`);
++    const bytes = await response.arrayBuffer();
++    if (bytes.byteLength % (8 * Float32Array.BYTES_PER_ELEMENT) !== 0) {
++      throw new Error(`Invalid geometry file: ${meshName}.bin`);
++    }
++    return { meshName, floats: new Float32Array(bytes) };
++  }));
++
++  const primitives: Cesium.Primitive[] = [];
++  for (const { meshName, floats } of files) {
++    const quadCount = floats.length / 8;
++    for (let q = 0; q < quadCount; q += MAX_QUADS_PER_PRIMITIVE) {
++      primitives.push(
++        buildPaintPrimitive(
++          floats,
++          q,
++          Math.min(MAX_QUADS_PER_PRIMITIVE, quadCount - q),
++          PAINT_MESHES[meshName]
++        )
+       );
+-    })
+-  );
++    }
++  }
++  return primitives;
+ }
+ 
+ function styleRoadSurface(
+@@ -298,45 +382,6 @@
+     );
+     polygon.outline =
+       new Cesium.ConstantProperty(false);
+-  });
+-}
+-
+-function styleRoadCenterlines(
+-  dataSource: Cesium.DataSource
+-) {
+-  const markingMaterial =
+-    new Cesium.PolylineDashMaterialProperty({
+-      color: Cesium.Color.fromCssColorString(
+-        "#FFF4C2"
+-      ),
+-      gapColor: Cesium.Color.TRANSPARENT,
+-      dashLength: 24,
+-      dashPattern: 0xf0f0,
+-    });
+-
+-  dataSource.entities.values.forEach((entity) => {
+-    if (!entity.polyline) return;
+-
+-    raisePolyline(
+-      entity.polyline,
+-      ROAD_MARKING_HEIGHT
+-    );
+-    entity.polyline.width =
+-      new Cesium.ConstantProperty(3.25);
+-    entity.polyline.material = markingMaterial;
+-    entity.polyline.arcType =
+-      new Cesium.ConstantProperty(
+-        Cesium.ArcType.NONE
+-      );
+-    entity.polyline.clampToGround =
+-      new Cesium.ConstantProperty(false);
+-    entity.polyline.distanceDisplayCondition =
+-      new Cesium.ConstantProperty(
+-        new Cesium.DistanceDisplayCondition(
+-          0,
+-          8_000
+-        )
+-      );
+   });
+ }
+ 
+@@ -418,204 +463,26 @@
+   });
+ }
+ 
+-function styleParkingPaintLines(
+-  dataSource: Cesium.DataSource,
+-  height: number,
+-  width: number,
+-  maximumDistance: number,
+-  errorMessage: string
+-) {
+-  const paintColor =
+-    Cesium.Color.fromCssColorString(
+-      "#F8F6EE"
+-    ).withAlpha(0.96);
+-
+-  const paintMaterial =
+-    new Cesium.ColorMaterialProperty(
+-      paintColor
+-    );
+-
+-  const lineEntities =
+-    dataSource.entities.values.filter(
+-      (entity) => entity.polyline
+-    );
+-
+-  if (lineEntities.length === 0) {
+-    throw new Error(errorMessage);
+-  }
+-
+-  lineEntities.forEach((entity) => {
+-    const polyline = entity.polyline;
+-    if (!polyline) return;
+-
+-    raisePolyline(polyline, height);
+-    polyline.width =
+-      new Cesium.ConstantProperty(width);
+-    polyline.material = paintMaterial;
+-    polyline.arcType =
+-      new Cesium.ConstantProperty(
+-        Cesium.ArcType.NONE
+-      );
+-    polyline.clampToGround =
+-      new Cesium.ConstantProperty(false);
+-    polyline.distanceDisplayCondition =
+-      new Cesium.ConstantProperty(
+-        new Cesium.DistanceDisplayCondition(
+-          0,
+-          maximumDistance
+-        )
+-      );
++async function loadParkingSurface(url: string): Promise<Cesium.GeoJsonDataSource> {
++  const source = await Cesium.GeoJsonDataSource.load(url, {
++    clampToGround: false,
++    stroke: Cesium.Color.TRANSPARENT,
++    fill: Cesium.Color.WHITE,
+   });
++  source.name = "Parking paver surfaces";
++  styleParkingSurface(source);
++  return source;
+ }
+ 
+-function stylePavementRoadEdges(dataSource: Cesium.GeoJsonDataSource) {
+-  let styledLineCount = 0;
+-
+-  for (const entity of dataSource.entities.values) {
+-    const polyline = entity.polyline;
+-
+-    if (!polyline) continue;
+-
+-    raisePolyline(polyline, PAVEMENT_CURB_HEIGHT);
+-
+-    polyline.width = new Cesium.ConstantProperty(PAVEMENT_CURB_WIDTH);
+-    polyline.material = new Cesium.PolylineDashMaterialProperty({
+-      color: Cesium.Color.fromCssColorString("#F8F6EE"),
+-      gapColor: Cesium.Color.fromCssColorString("#151515"),
+-      dashLength: 40,
+-      dashPattern: 0xf0f0,
+-    });
+-
+-    polyline.arcType = new Cesium.ConstantProperty(Cesium.ArcType.NONE);
+-    polyline.clampToGround = new Cesium.ConstantProperty(false);
+-    polyline.distanceDisplayCondition = new Cesium.ConstantProperty(
+-      new Cesium.DistanceDisplayCondition(0, 5000),
+-    );
+-
+-    styledLineCount += 1;
+-  }
+-
+-  if (styledLineCount === 0) {
+-    throw new Error(
+-      "Pavement road-edge GeoJSON does not contain any usable line geometry.",
+-    );
+-  }
+-}
+-
+-async function loadPavementDataSources(
+-  pavementUrl: string,
+-): Promise<Cesium.GeoJsonDataSource[]> {
+-  const [pavementDataSource, roadEdgeDataSource] = await Promise.all([
+-    Cesium.GeoJsonDataSource.load(pavementUrl, {
+-      clampToGround: false,
+-      stroke: Cesium.Color.fromCssColorString("#AAA495"),
+-      strokeWidth: 1,
+-    }),
+-
+-    Cesium.GeoJsonDataSource.load(PAVEMENT_ROAD_EDGES_URL, {
+-      clampToGround: false,
+-      stroke: Cesium.Color.WHITE,
+-      strokeWidth: PAVEMENT_CURB_WIDTH,
+-    }),
+-  ]);
+-
+-  stylePavementRoadEdges(roadEdgeDataSource);
+-
+-  return [pavementDataSource, roadEdgeDataSource];
+-}
+-
+-async function loadParkingDataSources(
+-  surfaceUrl: string
+-) {
+-  const [parking, roadEdges] =
+-    await Promise.all([
+-      Cesium.GeoJsonDataSource.load(
+-        surfaceUrl,
+-        {
+-          clampToGround: false,
+-          stroke: Cesium.Color.TRANSPARENT,
+-          fill: Cesium.Color.WHITE,
+-        }
+-      ),
+-      Cesium.GeoJsonDataSource.load(
+-        PARKING_ROAD_EDGES_URL,
+-        {
+-          clampToGround: false,
+-          stroke: Cesium.Color.WHITE,
+-          strokeWidth: 2,
+-        }
+-      ),
+-    ]);
+-
+-  parking.name = "Parking paver surfaces";
+-  roadEdges.name = "Parking road-edge paint";
+-
+-  styleParkingSurface(parking);
+-  styleParkingPaintLines(
+-    roadEdges,
+-    PARKING_EDGE_HEIGHT,
+-    1.75,
+-    5_000,
+-    "The parking road-edge GeoJSON must contain line geometry."
+-  );
+-
+-  return [parking, roadEdges];
+-}
+-
+-async function loadParkingSpaceDataSource(
+-  lineUrl: string
+-) {
+-  const parkingSpaces =
+-    await Cesium.GeoJsonDataSource.load(
+-      lineUrl,
+-      {
+-        clampToGround: false,
+-        stroke: Cesium.Color.WHITE,
+-        strokeWidth: 1.5,
+-      }
+-    );
+-
+-  parkingSpaces.name = "Painted parking bays";
+-  styleParkingPaintLines(
+-    parkingSpaces,
+-    PARKING_SPACE_LINE_HEIGHT,
+-    1.5,
+-    3_500,
+-    "The parking-space GeoJSON must contain line geometry."
+-  );
+-
+-  return parkingSpaces;
+-}
+-
+-async function loadRoadDataSources(
+-  surfaceUrl: string
+-) {
+-  const [surface, centerlines] = await Promise.all([
+-    Cesium.GeoJsonDataSource.load(
+-      surfaceUrl,
+-      {
+-        clampToGround: false,
+-        stroke: Cesium.Color.TRANSPARENT,
+-        fill: Cesium.Color.WHITE,
+-      }
+-    ),
+-    Cesium.GeoJsonDataSource.load(
+-      ROAD_CENTERLINES_URL,
+-      {
+-        clampToGround: false,
+-        stroke: Cesium.Color.WHITE,
+-        strokeWidth: 2,
+-      }
+-    ),
+-  ]);
+-
+-  surface.name = "Road asphalt surface";
+-  centerlines.name = "Road center markings";
+-
+-  styleRoadSurface(surface);
+-  styleRoadCenterlines(centerlines);
+-
+-  return [surface, centerlines];
++async function loadRoadSurface(url: string): Promise<Cesium.GeoJsonDataSource> {
++  const source = await Cesium.GeoJsonDataSource.load(url, {
++    clampToGround: false,
++    stroke: Cesium.Color.TRANSPARENT,
++    fill: Cesium.Color.WHITE,
++  });
++  source.name = "Road asphalt surface";
++  styleRoadSurface(source);
++  return source;
+ }
+ 
+ function App() {
+@@ -630,6 +497,9 @@
+ 
+   const dataSourcesRef = useRef(
+     new Map<LayerId, Cesium.DataSource[]>()
++  );
++  const paintPrimitivesRef = useRef(
++    new Map<LayerId, Cesium.Primitive[]>()
+   );
+ 
+   const imageryLayerRef = useRef<Cesium.ImageryLayer | null>(
+@@ -712,10 +582,10 @@
+     const dataSources =
+       dataSourcesRef.current.get(layer.id);
+ 
+-    if (dataSources) {
+-      dataSources.forEach((dataSource) => {
+-        dataSource.show = visible;
+-      });
++    const primitives = paintPrimitivesRef.current.get(layer.id);
++    if (dataSources || primitives) {
++      dataSources?.forEach((dataSource) => { dataSource.show = visible; });
++      primitives?.forEach((primitive) => { primitive.show = visible; });
+       viewerRef.current?.scene.requestRender();
+     } else if (visible) {
+       loadLayerRef.current(layer.id);
+@@ -812,46 +682,46 @@
+ 
+         // GeoJSON renderer.
+         // Clamping disabled for performance.
+-        let loadedDataSources: Cesium.DataSource[];
++        let loadedDataSources: Cesium.DataSource[] = [];
++        let loadedPrimitives: Cesium.Primitive[] = [];
+ 
+         if (id === "roads") {
+-          loadedDataSources =
+-            await loadRoadDataSources(
+-              layer.url
+-            );
++          const [asphalt, markings] = await Promise.all([
++            loadRoadSurface(layer.url),
++            loadPaintPrimitives(["road-dashes"]),
++          ]);
++          loadedDataSources = [asphalt];
++          loadedPrimitives = markings;
+         } else if (id === "parking") {
+-          loadedDataSources =
+-            await loadParkingDataSources(
+-              layer.url
+-            );
++          const [pavers, edges] = await Promise.all([
++            loadParkingSurface(layer.url),
++            loadPaintPrimitives(["parking-edges"]),
++          ]);
++          loadedDataSources = [pavers];
++          loadedPrimitives = edges;
+         } else if (id === "parkingSpaces") {
+-          loadedDataSources = [
+-            await loadParkingSpaceDataSource(
+-              layer.url
+-            ),
+-          ];
++          loadedPrimitives = await loadPaintPrimitives(["parking-bays"]);
+         } else if (id === "sidewalks") {
+-          loadedDataSources =
+-            await loadPavementDataSources(
+-              layer.url
+-            );
++          // Static, metre-width pavement linework and black/white curb stripes.
++          // No camera-facing / screen-pixel-width polylines are used.
++          loadedPrimitives = await loadPaintPrimitives([
++            "pavement-outlines", "curb-white", "curb-black",
++          ]);
+         } else {
+           loadedDataSources = [
+-            await Cesium.GeoJsonDataSource.load(
+-              layer.url,
+-              {
+-                clampToGround: false,
+-                stroke: layerColor,
+-                strokeWidth: 2,
+-                fill: layerColor.withAlpha(
+-                  0.25
+-                ),
+-              }
+-            ),
++            await Cesium.GeoJsonDataSource.load(layer.url, {
++              clampToGround: false,
++              stroke: layerColor,
++              strokeWidth: 2,
++              fill: layerColor.withAlpha(0.25),
++            }),
+           ];
+         }
+ 
+-        if (disposed) return;
++        if (disposed) {
++          loadedPrimitives.forEach((primitive) => primitive.destroy());
++          return;
++        }
+ 
+         loadedDataSources.forEach(
+           (dataSource) => {
+@@ -866,17 +736,17 @@
+         );
+ 
+         for (const dataSource of loadedDataSources) {
+-          await viewer.dataSources.add(
+-            dataSource
+-          );
++          await viewer.dataSources.add(dataSource);
+         }
++        loadedPrimitives.forEach((primitive) => {
++          primitive.show = layerVisibilityRef.current[id];
++          viewer.scene.primitives.add(primitive);
++        });
+ 
+         if (disposed) return;
+ 
+-        dataSourcesRef.current.set(
+-          id,
+-          loadedDataSources
+-        );
++        dataSourcesRef.current.set(id, loadedDataSources);
++        paintPrimitivesRef.current.set(id, loadedPrimitives);
+ 
+         if (id === "boundary") {
+           boundaryDataSourceRef.current =
+@@ -1008,6 +878,7 @@
+       viewerRef.current = null;
+       boundaryDataSourceRef.current = null;
+       dataSourcesRef.current.clear();
++      paintPrimitivesRef.current.clear();
+       imageryLayerRef.current = null;
+       loadLayerRef.current = () => undefined;
+     };

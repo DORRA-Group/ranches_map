@@ -1,0 +1,179 @@
+import * as Cesium from "cesium";
+import { createLimestoneWalkwayTop } from "./limestoneWalkway";
+
+/**
+ * Pilot raised sidewalk and classic road-facing lamps.
+ * All lamp coordinates are geographic and stay fixed when the camera moves.
+ * The local +Y direction of the corrected upright GLB points along its lantern arm.
+ */
+type LampPlacement = {
+  id: string;
+  longitude: number;
+  latitude: number;
+  headingDegrees: number;
+  heightMeters: number;
+};
+
+type LampCollection = {
+  lamps: LampPlacement[];
+  model: string;
+};
+
+type LonLat = [number, number];
+type RoadGeometry =
+  | { type: "LineString"; coordinates: LonLat[] }
+  | { type: "MultiLineString"; coordinates: LonLat[][] };
+
+type RoadCenterlines = {
+  type: "FeatureCollection";
+  features: { geometry: RoadGeometry | null }[];
+};
+
+const ROAD_CENTERLINES_URL = "/data/road-centerlines.geojson";
+const LAMP_SCALE = 1.75; // preserve enlarged ~8.3 m road-facing lampposts
+const LAMP_MIN_PIXEL_SIZE = 40; // readable at medium zoom
+const LAMP_MAX_SCALE = 3.5; // prevents oversized models from a distance
+
+export const SIDEWALK_DEMO_CENTER = {
+  longitude: 30.86297,
+  latitude: 30.09347,
+};
+
+/**
+ * Bearing towards the closest point on a road centerline.
+ * This works on straight or curved streets, and only runs when loading posts.
+ * An unusually remote/invalid road falls back to the surveyed placement heading.
+ */
+function bearingToRoad(lamp: LampPlacement, roads: RoadCenterlines | null): number {
+  if (!roads || !Array.isArray(roads.features)) return lamp.headingDegrees;
+
+  const metersPerDegreeLatitude = 111_195;
+  const metersPerDegreeLongitude =
+    metersPerDegreeLatitude * Math.cos(Cesium.Math.toRadians(lamp.latitude));
+
+  let distanceSquared = Number.POSITIVE_INFINITY;
+  let roadEast = 0;
+  let roadNorth = 0;
+
+  const consider = (vertices: LonLat[]) => {
+    for (let i = 1; i < vertices.length; i++) {
+      const a = vertices[i - 1];
+      const b = vertices[i];
+      const ax = (a[0] - lamp.longitude) * metersPerDegreeLongitude;
+      const ay = (a[1] - lamp.latitude) * metersPerDegreeLatitude;
+      const bx = (b[0] - lamp.longitude) * metersPerDegreeLongitude;
+      const by = (b[1] - lamp.latitude) * metersPerDegreeLatitude;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lengthSquared = dx * dx + dy * dy;
+      if (lengthSquared < 0.000001) continue;
+
+      const u = Cesium.Math.clamp(-(ax * dx + ay * dy) / lengthSquared, 0, 1);
+      const east = ax + u * dx;
+      const north = ay + u * dy;
+      const candidate = east * east + north * north;
+      if (candidate < distanceSquared) {
+        distanceSquared = candidate;
+        roadEast = east;
+        roadNorth = north;
+      }
+    }
+  };
+
+  for (const feature of roads.features) {
+    const geometry = feature.geometry;
+    if (!geometry) continue;
+    if (geometry.type === "LineString") consider(geometry.coordinates);
+    if (geometry.type === "MultiLineString") {
+      geometry.coordinates.forEach(consider);
+    }
+  }
+
+  // Do not turn the lamp toward an unrelated road on a distant block.
+  if (distanceSquared > 35 * 35 || distanceSquared < 0.000001) {
+    return lamp.headingDegrees;
+  }
+  // Local arm points north at heading 0. Positive heading rotates clockwise.
+  return (Cesium.Math.toDegrees(Math.atan2(roadEast, roadNorth)) + 360) % 360;
+}
+
+export async function loadSidewalkDemo(
+  topHeightMeters: number,
+  baseHeightMeters: number,
+): Promise<Cesium.DataSource[]> {
+  const roadPromise: Promise<RoadCenterlines | null> = fetch(ROAD_CENTERLINES_URL)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Road centerlines unavailable (${res.status})`);
+      return res.json() as Promise<RoadCenterlines>;
+    })
+    .catch((error: unknown) => {
+      console.warn("Using saved lamppost headings; couldn't read road centerlines", error);
+      return null;
+    });
+
+  const [sidewalk, response, roads] = await Promise.all([
+    Cesium.GeoJsonDataSource.load("/data/demo-sidewalk.geojson", {
+      clampToGround: false,
+      stroke: Cesium.Color.TRANSPARENT,
+      fill: Cesium.Color.WHITE,
+    }),
+    fetch("/data/demo-lampposts.json"),
+    roadPromise,
+  ]);
+
+  if (!response.ok) {
+    throw new Error(`Unable to load lamppost placements (${response.status})`);
+  }
+  const data = (await response.json()) as LampCollection;
+  if (!Array.isArray(data.lamps) || typeof data.model !== "string") {
+    throw new Error("Malformed lamppost placement data");
+  }
+
+  // Real raised sidewalk. Match its top to the existing curb height.
+  sidewalk.name = "3D sidewalk pilot slab";
+  const stone = Cesium.Color.fromCssColorString("#CDBB9C");
+  // The solid raised slab provides 3D thickness and stone-coloured sides.
+  // A dedicated second surface has accurate 120 x 60 cm UV-mapped slabs.
+  const walkwayTop = createLimestoneWalkwayTop(sidewalk, topHeightMeters);
+  for (const entity of sidewalk.entities.values) {
+    if (!entity.polygon) continue;
+    entity.polygon.height = new Cesium.ConstantProperty(topHeightMeters);
+    entity.polygon.extrudedHeight = new Cesium.ConstantProperty(baseHeightMeters);
+    entity.polygon.material = new Cesium.ColorMaterialProperty(stone);
+    entity.polygon.outline = new Cesium.ConstantProperty(false);
+  }
+
+  const posts = new Cesium.CustomDataSource("Classic decorative road lamps");
+  for (const lamp of data.lamps) {
+    const position = Cesium.Cartesian3.fromDegrees(
+      lamp.longitude,
+      lamp.latitude,
+      topHeightMeters + 0.005,
+    );
+    // Account for the corrected GLB's arm orientation; keep it road-facing.
+    const roadHeading = (bearingToRoad(lamp, roads) + 180) % 360;
+    const orientation = Cesium.Transforms.headingPitchRollQuaternion(
+      position,
+      new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(roadHeading), 0, 0),
+    );
+    posts.entities.add({
+      id: lamp.id,
+      name: "Classic road-facing lamppost",
+      position,
+      orientation,
+      model: {
+        uri: data.model,
+        scale: LAMP_SCALE,
+        minimumPixelSize: LAMP_MIN_PIXEL_SIZE,
+        maximumScale: LAMP_MAX_SCALE,
+        shadows: Cesium.ShadowMode.CAST_ONLY,
+      },
+      properties: {
+        sourceModelHeightMeters: lamp.heightMeters,
+        displayHeightMeters: lamp.heightMeters * LAMP_SCALE,
+        headingDegrees: roadHeading,
+      },
+    });
+  }
+  return [sidewalk, walkwayTop, posts];
+}

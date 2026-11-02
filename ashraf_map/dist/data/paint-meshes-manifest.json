@@ -1,0 +1,48 @@
+{
+  "coordinate_origin_lonlat": [
+    30.8601,
+    30.095
+  ],
+  "meshes": {
+    "road-dashes": {
+      "file": "road-dashes.bin",
+      "quads": 4550,
+      "width_m": 0.15
+    },
+    "curb-white": {
+      "file": "curb-white.bin",
+      "quads": 14397,
+      "width_m": 0.55
+    },
+    "curb-black": {
+      "file": "curb-black.bin",
+      "quads": 13730,
+      "width_m": 0.55
+    },
+    "parking-curb-white": {
+      "file": "parking-curb-white.bin",
+      "quads": 0,
+      "width_m": 0.55
+    },
+    "parking-curb-black": {
+      "file": "parking-curb-black.bin",
+      "quads": 0,
+      "width_m": 0.55
+    },
+    "parking-edges": {
+      "file": "parking-edges.bin",
+      "quads": 6720,
+      "width_m": 0.12
+    },
+    "parking-bays": {
+      "file": "parking-bays.bin",
+      "quads": 23915,
+      "width_m": 0.1
+    },
+    "pavement-outlines": {
+      "file": "pavement-outlines.bin",
+      "quads": 26436,
+      "width_m": 0.1
+    }
+  }
+}

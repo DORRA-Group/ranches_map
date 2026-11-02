@@ -1,0 +1,46 @@
+{
+  "mode": "full-site-redstone-coverage",
+  "output_model": "/models/ranches-redstone-coverage.glb",
+  "source_boundary": "land_boundary.geojson",
+  "excluded_layers": [
+    "road-surface.geojson",
+    "parking.geojson",
+    "land_use.geojson",
+    "green-areas.geojson surfaces and inner rings",
+    "landscape.geojson inner rings only",
+    "water-areas.geojson"
+  ],
+  "green_area_count": 40,
+  "green_inner_hole_count": 0,
+  "green_surface_area_sqm": 38954.33,
+  "landscape_inner_hole_count": 188,
+  "component_count": 60,
+  "surface_area_sqm": 254489.73,
+  "triangles": 111511,
+  "wall_triangles": 277398,
+  "texture_mapping": "continuous-world-aligned",
+  "texture_m_per_repeat": 2.4,
+  "pavement_top_height_m": 0.2,
+  "pavement_base_height_m": 0.05,
+  "lamppost_count_preserved": 243,
+  "clearance_m": {
+    "roads": 0.6,
+    "parking": 0.6,
+    "plots": 0.05,
+    "green_areas": 0.05,
+    "green_inner_holes": 0.05,
+    "landscape_inner_holes": 0.05,
+    "water_areas": 0.05
+  },
+  "validation_overlap_sqm": {
+    "outside_boundary_sqm": 0.0,
+    "road_overlap_sqm": 0.0,
+    "parking_overlap_sqm": 0.0,
+    "plot_overlap_sqm": 0.0,
+    "green_overlap_sqm": 0.0,
+    "green_inner_overlap_sqm": 0.0,
+    "landscape_inner_overlap_sqm": 0.0,
+    "water_overlap_sqm": 0.0
+  },
+  "safety_note": "Concept only; approved green and water areas are excluded from pavement, and other inner rings are reserved for future lakes or gardens. land_use contains parcel polygons rather than verified building footprints. Site elevations and pavement engineering are unverified."
+}

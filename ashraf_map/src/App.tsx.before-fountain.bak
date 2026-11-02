@@ -1,0 +1,2535 @@
+
+
+import { useEffect, useRef, useState } from "react";
+
+import * as Cesium from "cesium";
+import { styleRoadSurfaceMetered } from "./roadTextureMapping";
+import { loadFullSidewalk } from "./fullSidewalk";
+import { loadWaterAreas, WATER_AREAS_BOUNDS } from "./waterAreas";
+import { loadGreenAreas, GREEN_AREAS_BOUNDS } from "./greenAreas";
+
+
+
+type BasemapName = "satellite" | "street";
+
+type LayerStatus = "idle" | "loading" | "ready" | "error";
+
+
+
+type LayerId =
+
+  | "boundary"
+
+  | "roads"
+
+  | "plots"
+
+  | "setbacks"
+
+  | "parking"
+
+  | "parkingSpaces"
+
+  | "landscape"
+
+  | "waterAreas"
+
+  | "sidewalks"
+
+  | "fence"
+
+  | "phases"
+  | "sidewalkDemo";
+
+
+
+type LayerSpec = {
+
+  id: LayerId;
+
+  label: string;
+
+  arabicLabel: string;
+
+  featureCount: string;
+
+  color: string;
+
+  url: string;
+
+  defaultVisible: boolean;
+
+};
+
+
+
+type LayerUiState = Record<
+
+  LayerId,
+
+  { visible: boolean; status: LayerStatus }
+
+>;
+
+
+
+const PROJECT_CENTER = {
+
+  longitude: 30.8601,
+
+  latitude: 30.095,
+
+};
+
+
+
+const PROJECT_RANGE = 4300;
+
+const ROAD_SURFACE_URL = "/data/road-surface.geojson";
+
+const ASPHALT_TEXTURE_URL = "/textures/asphalt.jpg";
+
+const ROAD_SURFACE_HEIGHT = 0.05;
+
+const ROAD_MARKING_HEIGHT = ROAD_SURFACE_HEIGHT + 0.015;
+
+
+
+const PARKING_TEXTURE_URL =
+
+  "/textures/parking-pavers.png";
+
+
+
+const PARKING_SURFACE_HEIGHT = 0.08;
+
+const PARKING_TEXTURE_SIZE_METERS = 3;
+
+const PARKING_EDGE_HEIGHT = PARKING_SURFACE_HEIGHT + 0.015;
+
+const PARKING_SPACE_LINE_HEIGHT = PARKING_SURFACE_HEIGHT + 0.018;
+
+
+
+const PAVEMENT_CURB_HEIGHT = ROAD_SURFACE_HEIGHT + 0.15; // raised 15 cm over asphalt
+
+const PAVEMENT_OUTLINE_HEIGHT = PAVEMENT_CURB_HEIGHT - 0.005;
+
+
+
+// All GIS layers now use GeoJSON.
+
+const LAYERS: LayerSpec[] = [
+
+  {
+
+    id: "boundary",
+
+    label: "Project boundary",
+
+    arabicLabel: "حدود قطعة الأرض",
+
+    featureCount: "1",
+
+    color: "#E9D2F7",
+
+    url: "/data/land_boundary.geojson",
+
+    defaultVisible: true,
+
+  },
+
+  {
+
+    id: "roads",
+
+    label: "Asphalt roads",
+
+    arabicLabel: "شبكة الطرق الأسفلتية",
+
+    featureCount: "42",
+
+    color: "#545957",
+
+    url: ROAD_SURFACE_URL,
+
+    defaultVisible: true,
+
+  },
+
+  {
+
+    id: "plots",
+
+    label: "Land plots",
+
+    arabicLabel: "قطع الأراضي",
+
+    featureCount: "428",
+
+    color: "#F3B35A",
+
+    url: "/data/land_use.geojson",
+
+    defaultVisible: true,
+
+  },
+
+  {
+
+    id: "setbacks",
+
+    label: "Building setbacks",
+
+    arabicLabel: "مناطق الارتداد",
+
+    featureCount: "765",
+
+    color: "#A59ACD",
+
+    url: "/data/Responses_area.geojson",
+
+    defaultVisible: false,
+
+  },
+
+  {
+
+    id: "parking",
+
+    label: "Parking areas",
+
+    arabicLabel: "انتظار سيارات",
+
+    featureCount: "105",
+
+    color: "#D4FCD6",
+
+    url: "/data/parking.geojson",
+
+    defaultVisible: true,
+
+  },
+
+  {
+
+    id: "parkingSpaces",
+
+    label: "Detailed parking bays",
+
+    arabicLabel: "أماكن انتظار السيارات",
+
+    featureCount: "3,290",
+
+    color: "#8C0048",
+
+    url: "/data/parkings_line.geojson",
+
+    defaultVisible: false,
+
+  },
+
+  {
+
+    id: "landscape",
+
+    label: "Green areas",
+
+    arabicLabel: "المساحات الخضراء",
+
+    featureCount: "40",
+
+    color: "#5D923F",
+
+    url: "/data/green-areas.geojson",
+
+    defaultVisible: true,
+
+  },
+
+  {
+    id: "waterAreas",
+    label: "Animated water areas",
+    arabicLabel: "مناطق المياه المتحركة",
+    featureCount: "6",
+    color: "#32A9D6",
+    url: "/data/water-areas.geojson",
+    defaultVisible: true,
+  },
+
+  {
+
+    id: "sidewalks",
+
+    label: "Sidewalks",
+
+    arabicLabel: "الرصيف",
+
+    featureCount: "83",
+
+    color: "#9C0046",
+
+    url: "/data/Pavement_Cesium.geojson",
+
+    defaultVisible: true,
+
+  },
+
+  {
+    id: "sidewalkDemo",
+    label: "Redstone pavement & classic lamps",
+    arabicLabel: "رصف حجري أحمر وأعمدة إنارة كلاسيكية",
+    featureCount: "243",
+    color: "#CDBB9C",
+    url: "/data/demo-sidewalk.geojson",
+    defaultVisible: true,
+  },
+
+  {
+
+    id: "fence",
+
+    label: "Outer fence",
+
+    arabicLabel: "السور الخارجي",
+
+    featureCount: "1",
+
+    color: "#C6C9F7",
+
+    url: "/data/outer_wall.geojson",
+
+    defaultVisible: true,
+
+  },
+
+  {
+
+    id: "phases",
+
+    label: "Project phases",
+
+    arabicLabel: "مراحل المشروع",
+
+    featureCount: "2",
+
+    color: "#BEF7DF",
+
+    url: "/data/project_stages.geojson",
+
+    defaultVisible: false,
+
+  },
+
+];
+
+
+
+const BASEMAPS: Record<
+
+  BasemapName,
+
+  { url: string; credit: string; maximumLevel: number }
+
+> = {
+
+  satellite: {
+
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+
+    credit: "Esri World Imagery",
+
+    maximumLevel: 19,
+
+  },
+
+  street: {
+
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+
+    credit: "OpenStreetMap contributors",
+
+    maximumLevel: 19,
+
+  },
+
+};
+
+
+
+function createInitialLayerState(): LayerUiState {
+
+  return Object.fromEntries(
+
+    LAYERS.map((layer) => [
+
+      layer.id,
+
+      {
+
+        visible: layer.defaultVisible,
+
+        status: "idle" as LayerStatus,
+
+      },
+
+    ])
+
+  ) as LayerUiState;
+
+}
+
+
+
+function BrandIcon() {
+
+  return (
+
+    <svg viewBox="0 0 42 42" aria-hidden="true">
+
+      <path d="M5 31.5 14.5 7h13L37 31.5 21 38Z" />
+
+      <path d="M15 20.5h12M12.5 27h17" />
+
+    </svg>
+
+  );
+
+}
+
+
+
+function flyToProject(
+
+  viewer: Cesium.Viewer,
+
+  dataSource: Cesium.DataSource | null,
+
+  duration = 1.35
+
+) {
+
+  if (dataSource) {
+
+    void viewer.flyTo(dataSource, {
+
+      duration,
+
+      offset: new Cesium.HeadingPitchRange(
+
+        Cesium.Math.toRadians(12),
+
+        Cesium.Math.toRadians(-48),
+
+        PROJECT_RANGE
+
+      ),
+
+    });
+
+    return;
+
+  }
+
+
+
+  viewer.camera.flyTo({
+
+    destination: Cesium.Cartesian3.fromDegrees(
+
+      PROJECT_CENTER.longitude,
+
+      PROJECT_CENTER.latitude,
+
+      5200
+
+    ),
+
+    orientation: {
+
+      heading: Cesium.Math.toRadians(12),
+
+      pitch: Cesium.Math.toRadians(-48),
+
+      roll: 0,
+
+    },
+
+    duration,
+
+  });
+
+}
+
+
+
+// Keep administrative boundaries as outlines.
+
+function applyAdministrativeLayerDisplay(
+
+  dataSource: Cesium.DataSource,
+
+  id: LayerId
+
+) {
+
+  if (id !== "boundary" && id !== "fence") return;
+
+
+
+  dataSource.entities.values.forEach((entity) => {
+
+    if (entity.polygon) {
+
+      entity.polygon.fill = new Cesium.ConstantProperty(false);
+
+      entity.polygon.outline = new Cesium.ConstantProperty(true);
+
+    }
+
+  });
+
+}
+
+
+
+// All paint and curb stripes are REAL polygons in metres, not screen-pixel
+
+// polylines. They are exported once by scripts/build-paint-meshes.py and
+
+// remain anchored to the earth as the camera zooms or rotates.
+
+type PaintMeshName =
+
+  | "road-dashes"
+
+  | "curb-white"
+
+  | "curb-black"
+  | "parking-curb-white"
+  | "parking-curb-black"
+
+  | "parking-edges"
+
+  | "parking-bays"
+
+  | "pavement-outlines";
+
+
+
+const PAINT_MESHES: Record<PaintMeshName, { color: string; height: number; baseHeight?: number }> = {
+
+  "road-dashes": { color: "#FFF4C2", height: ROAD_MARKING_HEIGHT },
+
+  "curb-white": { color: "#F8F6EE", height: PAVEMENT_CURB_HEIGHT, baseHeight: ROAD_SURFACE_HEIGHT },
+
+  "curb-black": { color: "#151515", height: PAVEMENT_CURB_HEIGHT, baseHeight: ROAD_SURFACE_HEIGHT },
+  "parking-curb-white": { color: "#F8F6EE", height: PAVEMENT_CURB_HEIGHT, baseHeight: PARKING_SURFACE_HEIGHT },
+  "parking-curb-black": { color: "#151515", height: PAVEMENT_CURB_HEIGHT, baseHeight: PARKING_SURFACE_HEIGHT },
+
+  "parking-edges": { color: "#F8F6EE", height: PARKING_EDGE_HEIGHT },
+
+  "parking-bays": { color: "#F8F6EE", height: PARKING_SPACE_LINE_HEIGHT },
+
+  "pavement-outlines": { color: "#AAA495", height: PAVEMENT_OUTLINE_HEIGHT },
+
+};
+
+
+
+const PAINT_MESH_ORIGIN = { longitude: 30.8601, latitude: 30.0950 };
+
+// Raised curb segments have eight vertices each. Keep indices within Uint16.
+const MAX_QUADS_PER_PRIMITIVE = 8_000;
+
+
+
+function buildPaintPrimitive(
+  source: Float32Array,
+  startQuad: number,
+  quadCount: number,
+  config: { color: string; height: number; baseHeight?: number }
+): Cesium.Primitive {
+  // Each mesh quad contains four WGS84 corners. If baseHeight is supplied,
+  // draw the painted top PLUS four solid vertical curb faces underneath it.
+  // Coordinates and widths are metric and never change when camera moves.
+  const isRaisedCurb = config.baseHeight !== undefined;
+  const verticesPerQuad = isRaisedCurb ? 8 : 4;
+  const indicesPerQuad = isRaisedCurb ? 30 : 6;
+  const positions = new Float64Array(quadCount * verticesPerQuad * 3);
+  const indices = new Uint16Array(quadCount * indicesPerQuad);
+
+  for (let q = 0; q < quadCount; q++) {
+    const firstVertex = q * verticesPerQuad;
+    for (let corner = 0; corner < 4; corner++) {
+      const offset = (startQuad + q) * 8 + corner * 2;
+      const lon = PAINT_MESH_ORIGIN.longitude + source[offset];
+      const lat = PAINT_MESH_ORIGIN.latitude + source[offset + 1];
+
+      const top = Cesium.Cartesian3.fromDegrees(lon, lat, config.height);
+      const pos = (firstVertex + corner) * 3;
+      positions[pos] = top.x;
+      positions[pos + 1] = top.y;
+      positions[pos + 2] = top.z;
+
+      if (isRaisedCurb) {
+        const bottom = Cesium.Cartesian3.fromDegrees(lon, lat, config.baseHeight!);
+        const bottomPos = (firstVertex + 4 + corner) * 3;
+        positions[bottomPos] = bottom.x;
+        positions[bottomPos + 1] = bottom.y;
+        positions[bottomPos + 2] = bottom.z;
+      }
+    }
+
+    const i = q * indicesPerQuad;
+    indices.set([
+      firstVertex, firstVertex + 1, firstVertex + 2,
+      firstVertex, firstVertex + 2, firstVertex + 3,
+    ], i);
+
+    if (isRaisedCurb) {
+      let offset = i + 6;
+      for (let edge = 0; edge < 4; edge++) {
+        const next = (edge + 1) % 4;
+        const topA = firstVertex + edge;
+        const topB = firstVertex + next;
+        const bottomA = firstVertex + 4 + edge;
+        const bottomB = firstVertex + 4 + next;
+        indices.set([topA, bottomA, bottomB, topA, bottomB, topB], offset);
+        offset += 6;
+      }
+    }
+  }
+
+  const attributes = new Cesium.GeometryAttributes();
+  attributes.position = new Cesium.GeometryAttribute({
+    componentDatatype: Cesium.ComponentDatatype.DOUBLE,
+    componentsPerAttribute: 3,
+    values: positions,
+  });
+
+  const geometry = new Cesium.Geometry({
+    attributes,
+    indices,
+    primitiveType: Cesium.PrimitiveType.TRIANGLES,
+    boundingSphere: Cesium.BoundingSphere.fromVertices(positions),
+  });
+
+  const color = Cesium.Color.fromCssColorString(config.color);
+  return new Cesium.Primitive({
+    geometryInstances: new Cesium.GeometryInstance({
+      geometry,
+      attributes: {
+        color: Cesium.ColorGeometryInstanceAttribute.fromColor(color),
+      },
+    }),
+    appearance: new Cesium.PerInstanceColorAppearance({
+      flat: true,
+      translucent: false,
+      closed: false,
+    }),
+    // Custom Geometry has no Cesium worker module.
+    asynchronous: false,
+    allowPicking: false,
+  });
+}
+
+async function loadPaintPrimitives(meshNames: PaintMeshName[]): Promise<Cesium.Primitive[]> {
+
+  const files = await Promise.all(meshNames.map(async (meshName) => {
+
+    const response = await fetch(`/data/${meshName}.bin`);
+
+    if (!response.ok) throw new Error(`Unable to load ${meshName}.bin (${response.status})`);
+
+    const bytes = await response.arrayBuffer();
+
+    if (bytes.byteLength % (8 * Float32Array.BYTES_PER_ELEMENT) !== 0) {
+
+      throw new Error(`Invalid geometry file: ${meshName}.bin`);
+
+    }
+
+    return { meshName, floats: new Float32Array(bytes) };
+
+  }));
+
+
+
+  const primitives: Cesium.Primitive[] = [];
+
+  for (const { meshName, floats } of files) {
+
+    const quadCount = floats.length / 8;
+
+    for (let q = 0; q < quadCount; q += MAX_QUADS_PER_PRIMITIVE) {
+
+      primitives.push(
+
+        buildPaintPrimitive(
+
+          floats,
+
+          q,
+
+          Math.min(MAX_QUADS_PER_PRIMITIVE, quadCount - q),
+
+          PAINT_MESHES[meshName]
+
+        )
+
+      );
+
+    }
+
+  }
+
+  return primitives;
+
+}
+
+
+
+function styleRoadSurface(dataSource: Cesium.DataSource) {
+  // Geographic positions unchanged; asphalt tiles repeat at constant metre scale.
+  styleRoadSurfaceMetered(dataSource, ASPHALT_TEXTURE_URL, ROAD_SURFACE_HEIGHT);
+}
+
+function getParkingTextureRepeat(
+
+  polygon: Cesium.PolygonGraphics
+
+) {
+
+  const hierarchy = polygon.hierarchy?.getValue(
+
+    Cesium.JulianDate.now()
+
+  );
+
+
+
+  if (!hierarchy?.positions.length) {
+
+    return new Cesium.Cartesian2(1, 1);
+
+  }
+
+
+
+  const rectangle =
+
+    Cesium.Rectangle.fromCartesianArray(
+
+      hierarchy.positions
+
+    );
+
+
+
+  const middleLatitude =
+
+    (rectangle.south + rectangle.north) / 2;
+
+
+
+  const earthRadius =
+
+    Cesium.Ellipsoid.WGS84.maximumRadius;
+
+
+
+  const widthMeters =
+
+    rectangle.width *
+
+    earthRadius *
+
+    Math.cos(middleLatitude);
+
+
+
+  const heightMeters =
+
+    rectangle.height * earthRadius;
+
+
+
+  return new Cesium.Cartesian2(
+
+    Math.max(
+
+      1,
+
+      widthMeters / PARKING_TEXTURE_SIZE_METERS
+
+    ),
+
+    Math.max(
+
+      1,
+
+      heightMeters / PARKING_TEXTURE_SIZE_METERS
+
+    )
+
+  );
+
+}
+
+
+
+function styleParkingSurface(
+
+  dataSource: Cesium.DataSource
+
+) {
+
+  const parkingPolygons =
+
+    dataSource.entities.values.filter(
+
+      (entity) => entity.polygon
+
+    );
+
+
+
+  if (parkingPolygons.length === 0) {
+
+    throw new Error(
+
+      "The parking GeoJSON must contain Polygon or MultiPolygon geometry."
+
+    );
+
+  }
+
+
+
+  parkingPolygons.forEach((entity) => {
+
+    const polygon = entity.polygon;
+
+    if (!polygon) return;
+
+
+
+    polygon.material =
+
+      new Cesium.ImageMaterialProperty({
+
+        image: PARKING_TEXTURE_URL,
+
+        repeat: getParkingTextureRepeat(
+
+          polygon
+
+        ),
+
+        color: Cesium.Color.WHITE,
+
+        transparent: false,
+
+      });
+
+
+
+    polygon.height = new Cesium.ConstantProperty(
+
+      PARKING_SURFACE_HEIGHT
+
+    );
+
+    polygon.outline =
+
+      new Cesium.ConstantProperty(false);
+
+  });
+
+}
+
+
+
+async function loadParkingSurface(url: string): Promise<Cesium.GeoJsonDataSource> {
+
+  const source = await Cesium.GeoJsonDataSource.load(url, {
+
+    clampToGround: false,
+
+    stroke: Cesium.Color.TRANSPARENT,
+
+    fill: Cesium.Color.WHITE,
+
+  });
+
+  source.name = "Parking paver surfaces";
+
+  styleParkingSurface(source);
+
+  return source;
+
+}
+
+
+
+async function loadRoadSurface(url: string): Promise<Cesium.GeoJsonDataSource> {
+
+  const source = await Cesium.GeoJsonDataSource.load(url, {
+
+    clampToGround: false,
+
+    stroke: Cesium.Color.TRANSPARENT,
+
+    fill: Cesium.Color.WHITE,
+
+  });
+
+  source.name = "Road asphalt surface";
+
+  styleRoadSurface(source);
+
+  return source;
+
+}
+
+
+
+function App() {
+
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+
+  const latitudeRef = useRef<HTMLSpanElement>(null);
+
+  const longitudeRef = useRef<HTMLSpanElement>(null);
+
+
+
+  const viewerRef = useRef<Cesium.Viewer | null>(null);
+
+  const boundaryDataSourceRef = useRef<Cesium.DataSource | null>(
+
+    null
+
+  );
+
+
+
+  const dataSourcesRef = useRef(
+
+    new Map<LayerId, Cesium.DataSource[]>()
+
+  );
+
+  const paintPrimitivesRef = useRef(
+
+    new Map<LayerId, Cesium.Primitive[]>()
+
+  );
+
+
+
+  const imageryLayerRef = useRef<Cesium.ImageryLayer | null>(
+
+    null
+
+  );
+
+
+
+  const loadLayerRef = useRef<(id: LayerId) => void>(
+
+    () => undefined
+
+  );
+
+
+
+  const layerVisibilityRef = useRef(
+
+    Object.fromEntries(
+
+      LAYERS.map((layer) => [
+
+        layer.id,
+
+        layer.defaultVisible,
+
+      ])
+
+    ) as Record<LayerId, boolean>
+
+  );
+
+
+
+  const [panelOpen, setPanelOpen] = useState(true);
+
+  const [layers, setLayers] = useState<LayerUiState>(
+
+    createInitialLayerState
+
+  );
+
+
+
+  const [basemap, setBasemap] =
+
+    useState<BasemapName>("satellite");
+
+
+
+  // -----------------------
+
+  // Basemap management
+
+  // -----------------------
+
+
+
+  const applyBasemap = (name: BasemapName) => {
+
+    const viewer = viewerRef.current;
+
+    if (!viewer) return;
+
+
+
+    const config = BASEMAPS[name];
+
+
+
+    const provider = new Cesium.UrlTemplateImageryProvider({
+
+      url: config.url,
+
+      maximumLevel: config.maximumLevel,
+
+      credit: config.credit,
+
+    });
+
+
+
+    const replacement =
+
+      viewer.imageryLayers.addImageryProvider(provider, 0);
+
+
+
+    if (imageryLayerRef.current) {
+
+      viewer.imageryLayers.remove(
+
+        imageryLayerRef.current,
+
+        true
+
+      );
+
+    }
+
+
+
+    imageryLayerRef.current = replacement;
+
+    viewer.scene.requestRender();
+
+  };
+
+
+
+  const changeBasemap = (name: BasemapName) => {
+
+    setBasemap(name);
+
+    applyBasemap(name);
+
+  };
+
+
+
+  // -----------------------
+
+  // Layer visibility
+
+  // -----------------------
+
+
+
+  const toggleLayer = (layer: LayerSpec) => {
+
+    const visible = !layers[layer.id].visible;
+
+
+
+    layerVisibilityRef.current[layer.id] = visible;
+
+
+
+    setLayers((current) => ({
+
+      ...current,
+
+      [layer.id]: {
+
+        ...current[layer.id],
+
+        visible,
+
+      },
+
+    }));
+
+
+
+    const dataSources =
+
+      dataSourcesRef.current.get(layer.id);
+
+
+
+    const primitives = paintPrimitivesRef.current.get(layer.id);
+
+    if (dataSources || primitives) {
+
+      dataSources?.forEach((dataSource) => { dataSource.show = visible; });
+
+      primitives?.forEach((primitive) => { primitive.show = visible; });
+
+      viewerRef.current?.scene.requestRender();
+
+    } else if (visible) {
+
+      loadLayerRef.current(layer.id);
+
+    }
+
+  };
+
+
+
+  // -----------------------
+
+  // Cesium initialization
+
+  // -----------------------
+
+
+
+  useEffect(() => {
+
+    if (!mapContainerRef.current) return;
+
+
+
+    let disposed = false;
+
+    let coordinateFrame: number | undefined;
+
+    let waterAnimationFrame: number | undefined;
+
+    let lastWaterRenderTime = 0;
+
+
+
+    const viewer = new Cesium.Viewer(
+
+      mapContainerRef.current,
+
+      {
+
+        animation: false,
+
+        baseLayer: false,
+
+        baseLayerPicker: false,
+
+        fullscreenButton: false,
+
+        geocoder: false,
+
+        homeButton: false,
+
+        infoBox: false,
+
+        navigationHelpButton: false,
+
+        sceneModePicker: false,
+
+        selectionIndicator: false,
+
+        timeline: false,
+
+        shadows: true,
+
+
+
+        terrainProvider:
+
+          new Cesium.EllipsoidTerrainProvider(),
+
+
+
+        requestRenderMode: true,
+
+        maximumRenderTimeChange:
+
+          Number.POSITIVE_INFINITY,
+
+      }
+
+    );
+
+
+
+    viewerRef.current = viewer;
+    viewer.resolutionScale = 1.25;
+viewer.scene.requestRender();
+
+    // Fixed daytime sunlight for testing.
+    viewer.clock.currentTime =
+      Cesium.JulianDate.fromIso8601("2026-10-21T10:00:00Z");
+
+    viewer.clock.shouldAnimate = false;
+
+    viewer.shadows = true;
+    viewer.scene.shadowMap.darkness = 0.4;
+    viewer.scene.requestRender();
+
+
+
+    viewer.scene.globe.depthTestAgainstTerrain = false;
+
+    viewer.scene.globe.enableLighting = false;
+
+
+
+    if (viewer.scene.skyAtmosphere) {
+
+      viewer.scene.skyAtmosphere.show = true;
+
+    }
+
+
+
+    viewer.scene.fog.enabled = true;
+
+
+
+    viewer.scene.screenSpaceCameraController
+
+      .minimumZoomDistance = 120;
+
+
+
+    viewer.scene.screenSpaceCameraController
+
+      .maximumZoomDistance = 12_000_000;
+
+
+
+    applyBasemap("satellite");
+
+    flyToProject(viewer, null, 0);
+
+
+
+    // -----------------------
+
+    // Load GIS GeoJSON layers
+
+    // -----------------------
+
+
+
+    const loadingIds = new Set<LayerId>();
+
+
+
+    const loadLayer = async (id: LayerId) => {
+
+      const layer = LAYERS.find(
+
+        (candidate) => candidate.id === id
+
+      );
+
+
+
+      if (
+
+        !layer ||
+
+        dataSourcesRef.current.has(id) ||
+
+        loadingIds.has(id)
+
+      ) {
+
+        return;
+
+      }
+
+
+
+      loadingIds.add(id);
+
+
+
+      setLayers((current) => ({
+
+        ...current,
+
+        [id]: {
+
+          ...current[id],
+
+          status: "loading",
+
+        },
+
+      }));
+
+
+
+      try {
+
+        const layerColor =
+
+          Cesium.Color.fromCssColorString(layer.color) ??
+
+          Cesium.Color.WHITE;
+
+
+
+        // GeoJSON renderer.
+
+        // Clamping disabled for performance.
+
+        let loadedDataSources: Cesium.DataSource[] = [];
+
+        let loadedPrimitives: Cesium.Primitive[] = [];
+
+
+
+        if (id === "roads") {
+
+          const [asphalt, markings] = await Promise.all([
+
+            loadRoadSurface(layer.url),
+
+            loadPaintPrimitives(["road-dashes"]),
+
+          ]);
+
+          loadedDataSources = [asphalt];
+
+          loadedPrimitives = markings;
+
+        } else if (id === "parking") {
+
+          const [pavers, edges] = await Promise.all([
+
+            loadParkingSurface(layer.url),
+
+            loadPaintPrimitives(["parking-edges"]),
+
+          ]);
+
+          loadedDataSources = [pavers];
+
+          loadedPrimitives = edges;
+
+        } else if (id === "parkingSpaces") {
+
+          loadedPrimitives = await loadPaintPrimitives(["parking-bays"]);
+
+        } else if (id === "sidewalkDemo") {
+          loadedDataSources = await loadFullSidewalk(
+            PAVEMENT_CURB_HEIGHT,
+            ROAD_SURFACE_HEIGHT,
+          );
+        } else if (id === "waterAreas") {
+          loadedPrimitives = await loadWaterAreas(layer.url);
+        } else if (id === "landscape") {
+          loadedPrimitives = await loadGreenAreas(layer.url);
+        } else if (id === "sidewalks") {
+
+          // Static, metre-width pavement linework and black/white curb stripes.
+
+          // No camera-facing / screen-pixel-width polylines are used.
+
+          loadedPrimitives = await loadPaintPrimitives([
+
+            "pavement-outlines", "curb-white", "curb-black",
+            "parking-curb-white", "parking-curb-black",
+
+          ]);
+
+        } else {
+
+          loadedDataSources = [
+
+            await Cesium.GeoJsonDataSource.load(layer.url, {
+
+              clampToGround: false,
+
+              stroke: layerColor,
+
+              strokeWidth: 2,
+
+              fill: layerColor.withAlpha(0.25),
+
+            }),
+
+          ];
+
+        }
+
+
+
+        if (disposed) {
+
+          loadedPrimitives.forEach((primitive) => primitive.destroy());
+
+          return;
+
+        }
+
+
+
+        loadedDataSources.forEach(
+
+          (dataSource) => {
+
+            applyAdministrativeLayerDisplay(
+
+              dataSource,
+
+              id
+
+            );
+
+
+
+            dataSource.show =
+
+              layerVisibilityRef.current[id];
+
+          }
+
+        );
+
+
+
+        for (const dataSource of loadedDataSources) {
+
+          await viewer.dataSources.add(dataSource);
+
+        }
+
+        loadedPrimitives.forEach((primitive) => {
+
+          primitive.show = layerVisibilityRef.current[id];
+
+          viewer.scene.primitives.add(primitive);
+
+        });
+
+
+
+        if (disposed) return;
+
+
+
+        dataSourcesRef.current.set(id, loadedDataSources);
+
+        paintPrimitivesRef.current.set(id, loadedPrimitives);
+
+
+
+        if (id === "boundary") {
+
+          boundaryDataSourceRef.current =
+
+            loadedDataSources[0];
+
+
+
+          flyToProject(
+
+            viewer,
+
+            loadedDataSources[0],
+
+            1.55
+
+          );
+
+        }
+
+
+
+        setLayers((current) => ({
+
+          ...current,
+
+          [id]: {
+
+            ...current[id],
+
+            status: "ready",
+
+          },
+
+        }));
+
+
+
+        viewer.scene.requestRender();
+
+      } catch (error) {
+
+        console.error(
+
+          `Unable to load ${layer.label}`,
+
+          error
+
+        );
+
+
+
+        if (!disposed) {
+
+          setLayers((current) => ({
+
+            ...current,
+
+            [id]: {
+
+              ...current[id],
+
+              status: "error",
+
+            },
+
+          }));
+
+        }
+
+      } finally {
+
+        loadingIds.delete(id);
+
+      }
+
+    };
+
+
+
+    loadLayerRef.current = (id) => {
+
+      void loadLayer(id);
+
+    };
+
+
+
+    // Load only visible layers at startup.
+
+    LAYERS.filter(
+
+      (layer) => layer.defaultVisible
+
+    ).forEach((layer) => {
+
+      void loadLayer(layer.id);
+
+    });
+
+    const animateWater = (time: number) => {
+      if (disposed) return;
+      if (
+        !document.hidden &&
+        layerVisibilityRef.current.waterAreas &&
+        paintPrimitivesRef.current.has("waterAreas") &&
+        time - lastWaterRenderTime >= 1000 / 30
+      ) {
+        lastWaterRenderTime = time;
+        viewer.scene.requestRender();
+      }
+      waterAnimationFrame = window.requestAnimationFrame(animateWater);
+    };
+
+    waterAnimationFrame = window.requestAnimationFrame(animateWater);
+
+
+
+    // -----------------------
+
+    // Mouse coordinates
+
+    // -----------------------
+
+
+
+    const pointerHandler =
+
+      new Cesium.ScreenSpaceEventHandler(
+
+        viewer.scene.canvas
+
+      );
+
+
+
+    pointerHandler.setInputAction(
+
+      (
+
+        movement: Cesium.ScreenSpaceEventHandler.MotionEvent
+
+      ) => {
+
+        if (coordinateFrame) {
+
+          window.cancelAnimationFrame(
+
+            coordinateFrame
+
+          );
+
+        }
+
+
+
+        coordinateFrame =
+
+          window.requestAnimationFrame(() => {
+
+            const cartesian =
+
+              viewer.camera.pickEllipsoid(
+
+                movement.endPosition,
+
+                viewer.scene.globe.ellipsoid
+
+              );
+
+
+
+            if (!cartesian) return;
+
+
+
+            const cartographic =
+
+              Cesium.Cartographic.fromCartesian(
+
+                cartesian
+
+              );
+
+
+
+            const latitude =
+
+              Cesium.Math.toDegrees(
+
+                cartographic.latitude
+
+              );
+
+
+
+            const longitude =
+
+              Cesium.Math.toDegrees(
+
+                cartographic.longitude
+
+              );
+
+
+
+            if (latitudeRef.current) {
+
+              latitudeRef.current.textContent =
+
+                `${Math.abs(latitude).toFixed(5)}° ${latitude >= 0 ? "N" : "S"
+
+                }`;
+
+            }
+
+
+
+            if (longitudeRef.current) {
+
+              longitudeRef.current.textContent =
+
+                `${Math.abs(longitude).toFixed(5)}° ${longitude >= 0 ? "E" : "W"
+
+                }`;
+
+            }
+
+          });
+
+      },
+
+      Cesium.ScreenSpaceEventType.MOUSE_MOVE
+
+    );
+
+
+
+    // -----------------------
+
+    // Cleanup
+
+    // -----------------------
+
+
+
+    return () => {
+
+      disposed = true;
+
+
+
+      if (coordinateFrame) {
+
+        window.cancelAnimationFrame(
+
+          coordinateFrame
+
+        );
+
+      }
+
+      if (waterAnimationFrame) {
+        window.cancelAnimationFrame(waterAnimationFrame);
+      }
+
+
+
+      pointerHandler.destroy();
+
+      viewer.destroy();
+
+
+
+      viewerRef.current = null;
+
+      boundaryDataSourceRef.current = null;
+
+      dataSourcesRef.current.clear();
+
+      paintPrimitivesRef.current.clear();
+
+      imageryLayerRef.current = null;
+
+      loadLayerRef.current = () => undefined;
+
+    };
+
+  }, []);
+
+
+
+  // -----------------------
+
+  // Camera controls
+
+  // -----------------------
+
+
+
+  const resetProjectView = () => {
+
+    const viewer = viewerRef.current;
+
+
+
+    if (viewer) {
+
+      flyToProject(
+
+        viewer,
+
+        boundaryDataSourceRef.current
+
+      );
+
+    }
+
+  };
+
+
+
+  const viewWaterAreas = () => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    viewer.camera.flyTo({
+      destination: Cesium.Rectangle.fromDegrees(
+        WATER_AREAS_BOUNDS.west,
+        WATER_AREAS_BOUNDS.south,
+        WATER_AREAS_BOUNDS.east,
+        WATER_AREAS_BOUNDS.north,
+      ),
+      orientation: {
+        heading: 0,
+        pitch: Cesium.Math.toRadians(-90),
+        roll: 0,
+      },
+      duration: 1.4,
+    });
+  };
+
+  const viewGreenAreas = () => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const bounds = Cesium.Rectangle.fromDegrees(
+      GREEN_AREAS_BOUNDS.west,
+      GREEN_AREAS_BOUNDS.south,
+      GREEN_AREAS_BOUNDS.east,
+      GREEN_AREAS_BOUNDS.north,
+    );
+    const boundingSphere = Cesium.BoundingSphere.fromRectangle3D(
+      bounds,
+      viewer.scene.globe.ellipsoid,
+      0,
+    );
+    viewer.camera.flyToBoundingSphere(boundingSphere, {
+      offset: new Cesium.HeadingPitchRange(
+        Cesium.Math.toRadians(10),
+        Cesium.Math.toRadians(-55),
+        0,
+      ),
+      duration: 1.4,
+    });
+  };
+
+  const orientNorth = () => {
+
+    viewerRef.current?.camera.flyTo({
+
+      destination:
+
+        Cesium.Cartesian3.fromDegrees(
+
+          PROJECT_CENTER.longitude,
+
+          PROJECT_CENTER.latitude,
+
+          5200
+
+        ),
+
+      orientation: {
+
+        heading: 0,
+
+        pitch: Cesium.Math.toRadians(-55),
+
+        roll: 0,
+
+      },
+
+      duration: 1.1,
+
+    });
+
+  };
+
+
+
+  // -----------------------
+
+  // Layer statistics
+
+  // -----------------------
+
+
+
+  const visibleCount = LAYERS.filter(
+
+    (layer) => layers[layer.id].visible
+
+  ).length;
+
+
+
+  const readyCount = LAYERS.filter(
+
+    (layer) =>
+
+      layers[layer.id].status === "ready"
+
+  ).length;
+
+
+
+  const errorCount = LAYERS.filter(
+
+    (layer) =>
+
+      layers[layer.id].status === "error"
+
+  ).length;
+
+
+
+  const boundaryStatus =
+
+    layers.boundary.status;
+
+
+
+  // -----------------------
+
+  // Application UI
+
+  // -----------------------
+
+
+
+  return (
+
+    <main className="app-shell">
+
+      <div
+
+        ref={mapContainerRef}
+
+        id="cesiumContainer"
+
+        aria-label="Interactive 3D project map"
+
+      />
+
+
+
+      <div
+
+        className="map-tint"
+
+        aria-hidden="true"
+
+      />
+
+
+
+      <header className="topbar glass-panel">
+
+        <button
+
+          className="brand"
+
+          type="button"
+
+          onClick={resetProjectView}
+
+          aria-label="Ranches map home"
+
+        >
+
+          <span
+
+            className="brand-mark"
+
+            aria-hidden="true"
+
+          >
+
+            <BrandIcon />
+
+          </span>
+
+
+
+          <span>
+
+            <strong>RANCHES</strong>
+
+            <small>
+
+              PHASE 1 · GIS PORTAL
+
+            </small>
+
+          </span>
+
+        </button>
+
+
+
+        <nav
+
+          className="map-actions"
+
+          aria-label="Map controls"
+
+        >
+
+          <button
+
+            className="icon-button"
+
+            type="button"
+
+            aria-label="Toggle project panel"
+
+            aria-expanded={panelOpen}
+
+            onClick={() =>
+
+              setPanelOpen((open) => !open)
+
+            }
+
+          >
+
+            <svg
+
+              viewBox="0 0 24 24"
+
+              aria-hidden="true"
+
+            >
+
+              <path d="M4 6h16M4 12h16M4 18h16" />
+
+            </svg>
+
+          </button>
+
+
+
+          <button
+
+            className="action-button"
+
+            type="button"
+
+            onClick={resetProjectView}
+
+          >
+
+            <svg
+
+              viewBox="0 0 24 24"
+
+              aria-hidden="true"
+
+            >
+
+              <path d="M12 21a9 9 0 1 0-8.6-6.3M3 21v-6h6" />
+
+            </svg>
+
+            Project view
+
+          </button>
+
+          <button
+            className="action-button"
+            type="button"
+            onClick={viewGreenAreas}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M20 4C11 4 5 8.5 5 15c0 2.8 2.2 5 5 5 6.5 0 10-7 10-16ZM4 20c2.5-5 6.5-8.5 12-11" />
+            </svg>
+            Green areas
+          </button>
+
+
+
+          <button
+            className="action-button"
+            type="button"
+            onClick={viewWaterAreas}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M12 3c3 4 6 7.1 6 10.5a6 6 0 0 1-12 0C6 10.1 9 7 12 3Z" />
+            </svg>
+            Water areas
+          </button>
+
+          <button
+
+            className="icon-button"
+
+            type="button"
+
+            aria-label="Orient map north"
+
+            onClick={orientNorth}
+
+          >
+
+            <svg
+
+              viewBox="0 0 24 24"
+
+              aria-hidden="true"
+
+            >
+
+              <path d="m12 3 5 18-5-3-5 3Z" />
+
+            </svg>
+
+          </button>
+
+        </nav>
+
+      </header>
+
+
+
+      <aside
+
+        className={`project-panel glass-panel${panelOpen ? "" : " is-hidden"
+
+          }`}
+
+        aria-label="Project information"
+
+      >
+
+        <div className="panel-head">
+
+          <div>
+
+            <p className="eyebrow">
+
+              NEW SPHINX CITY
+
+            </p>
+
+
+
+            <h1>Site plan layers</h1>
+
+          </div>
+
+
+
+          <button
+
+            className="close-button"
+
+            type="button"
+
+            aria-label="Close project panel"
+
+            onClick={() =>
+
+              setPanelOpen(false)
+
+            }
+
+          >
+
+            <svg
+
+              viewBox="0 0 24 24"
+
+              aria-hidden="true"
+
+            >
+
+              <path d="m6 6 12 12M18 6 6 18" />
+
+            </svg>
+
+          </button>
+
+        </div>
+
+
+
+        <p className="intro">
+
+          Asphalt roads, land plots, parking, landscape,
+
+          pedestrian routes, building setbacks,
+
+          and project boundaries from the GIS
+
+          database.
+
+        </p>
+
+
+
+        <section
+
+          className="stats-grid"
+
+          aria-label="Project facts"
+
+        >
+
+          <article>
+
+            <span>Gross area</span>
+
+            <strong>299.01</strong>
+
+            <small>feddans</small>
+
+          </article>
+
+
+
+          <article>
+
+            <span>GIS features</span>
+
+            <strong>4,861</strong>
+
+            <small>mapped objects</small>
+
+          </article>
+
+        </section>
+
+
+
+        <div className="section-heading">
+
+          <span>Map layers</span>
+
+          <small>
+
+            {visibleCount} of {LAYERS.length} active
+
+          </small>
+
+        </div>
+
+
+
+        <div className="layers-list">
+
+          {LAYERS.map((layer) => {
+
+            const state = layers[layer.id];
+
+
+
+            return (
+
+              <button
+
+                className={`layer-row${state.status === "loading"
+
+                  ? " is-loading"
+
+                  : ""
+
+                  }${state.status === "error"
+
+                    ? " is-error"
+
+                    : ""
+
+                  }`}
+
+                key={layer.id}
+
+                type="button"
+
+                aria-pressed={state.visible}
+
+                onClick={() =>
+
+                  toggleLayer(layer)
+
+                }
+
+              >
+
+                <span
+
+                  className="layer-symbol"
+
+                  style={{
+
+                    borderColor:
+
+                      layer.color,
+
+                    backgroundColor:
+
+                      `${layer.color}33`,
+
+                  }}
+
+                  aria-hidden="true"
+
+                />
+
+
+
+                <span className="layer-copy">
+
+                  <strong>
+
+                    {layer.label}
+
+                  </strong>
+
+
+
+                  <small>
+
+                    {layer.arabicLabel}
+
+                  </small>
+
+                </span>
+
+
+
+                <span className="layer-meta">
+
+                  <small className="layer-count">
+
+                    {layer.featureCount}
+
+                  </small>
+
+
+
+                  <span
+
+                    className={`switch${state.visible
+
+                      ? " is-on"
+
+                      : ""
+
+                      }`}
+
+                    aria-hidden="true"
+
+                  >
+
+                    <span />
+
+                  </span>
+
+                </span>
+
+              </button>
+
+            );
+
+          })}
+
+        </div>
+
+
+
+        <div className="source-note">
+
+          <svg
+
+            viewBox="0 0 24 24"
+
+            aria-hidden="true"
+
+          >
+
+            <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Zm0-13v7m0-10.5v.1" />
+
+          </svg>
+
+
+
+          <p>
+
+            <strong>GIS source</strong>
+
+            <br />
+
+            Original GDB · GeoJSON · WGS84
+
+          </p>
+
+        </div>
+
+
+
+        <div
+
+          className={`panel-footer${errorCount
+
+            ? " is-error"
+
+            : readyCount
+
+              ? " is-ready"
+
+              : ""
+
+            }`}
+
+        >
+
+          <span className="status-dot" />
+
+
+
+          <span>
+
+            {errorCount
+
+              ? `${errorCount} layer${errorCount > 1
+
+                ? "s"
+
+                : ""
+
+              } unavailable`
+
+              : `${readyCount} GIS layers loaded`}
+
+          </span>
+
+        </div>
+
+      </aside>
+
+
+
+      <div
+
+        className="basemap-control glass-panel"
+
+        aria-label="Basemap selector"
+
+      >
+
+        {(
+
+          ["satellite", "street"] as BasemapName[]
+
+        ).map((name) => (
+
+          <button
+
+            key={name}
+
+            type="button"
+
+            className={
+
+              basemap === name
+
+                ? "active"
+
+                : ""
+
+            }
+
+            onClick={() =>
+
+              changeBasemap(name)
+
+            }
+
+          >
+
+            {name}
+
+          </button>
+
+        ))}
+
+      </div>
+
+
+
+      <div
+
+        className="coordinates glass-panel"
+
+        aria-live="polite"
+
+      >
+
+        <span ref={latitudeRef}>
+
+          30.0950° N
+
+        </span>
+
+
+
+        <span className="coordinate-divider" />
+
+
+
+        <span ref={longitudeRef}>
+
+          30.8600° E
+
+        </span>
+
+      </div>
+
+
+
+      <div
+
+        className={`loading-screen${boundaryStatus === "idle" ||
+
+          boundaryStatus === "loading"
+
+          ? ""
+
+          : " is-hidden"
+
+          }`}
+
+        role="status"
+
+        aria-live="polite"
+
+      >
+
+        <span className="loader-mark">
+
+          <BrandIcon />
+
+        </span>
+
+
+
+        <p>Loading GIS site plan</p>
+
+      </div>
+
+    </main>
+
+  );
+
+}
+
+
+
+export default App;

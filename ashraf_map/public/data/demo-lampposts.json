@@ -1,0 +1,36 @@
+{
+  "type": "streetlight-placement",
+  "model": "/models/classic-streetlamp.glb",
+  "placementNote": "Conceptual locations. Positive Y model arm points towards road.",
+  "sidewalkWidthM": 2.25,
+  "lamps": [
+    {
+      "id": "classic-lamp-1",
+      "longitude": 30.863035013862667,
+      "latitude": 30.093254731425674,
+      "headingDegrees": 254.7535,
+      "heightMeters": 4.74
+    },
+    {
+      "id": "classic-lamp-2",
+      "longitude": 30.862989801939403,
+      "latitude": 30.09339828979192,
+      "headingDegrees": 254.7535,
+      "heightMeters": 4.74
+    },
+    {
+      "id": "classic-lamp-3",
+      "longitude": 30.862944589884687,
+      "latitude": 30.09354184813905,
+      "headingDegrees": 254.7535,
+      "heightMeters": 4.74
+    },
+    {
+      "id": "classic-lamp-4",
+      "longitude": 30.862899377698536,
+      "latitude": 30.093685406467067,
+      "headingDegrees": 254.7535,
+      "heightMeters": 4.74
+    }
+  ]
+}
