@@ -1,0 +1,12 @@
+{
+  "[project]/components/Explorer.tsx [app-client] (ecmascript, next/dynamic entry)": {
+    "id": "[project]/components/Explorer.tsx [app-client] (ecmascript, next/dynamic entry)",
+    "files": [
+      "static/chunks/components_0ukl2bhy-vx0g._.js",
+      "static/chunks/node_modules_maplibre-gl_dist_maplibre-gl_mjs_16esp180l2fmy._.js",
+      "static/chunks/node_modules_maplibre-gl_dist_0l8dq9oe83uv1._.js",
+      "static/chunks/node_modules_proj4_0-1s2cyc8l1bn._.js",
+      "static/chunks/node_modules_07kq59gn7b1zn._.js"
+    ]
+  }
+}
